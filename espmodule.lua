@@ -528,8 +528,8 @@ pcall(function()
                 -- Hook Effects signal
                 if svc.Effects then
                     svc.Effects:Connect(function(effectName, ...)
+                        local args = {...}
                         pcall(function()
-                            local args = {...}
                             local eName = tostring(effectName):lower():gsub("%s+", "")
                             
                             -- Skip M1/basic effects
@@ -586,8 +586,8 @@ pcall(function()
                 -- Hook Hitbox signal too
                 if svc.Hitbox then
                     svc.Hitbox:Connect(function(effectName, ...)
+                        local args = {...}
                         pcall(function()
-                            local args = {...}
                             local eName = tostring(effectName):lower():gsub("%s+", "")
                             if M1_EFFECTS[eName] then return end
                             
