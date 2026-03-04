@@ -13,8 +13,25 @@ M.HealthEnabled = false
 M.TracersEnabled = false
 M.SkeletonEnabled = false
 M.TeamEnabled = false
+M.MovesetEnabled = false
+M.AbilitiesEnabled = false
 M.HeldItemEnabled = false
 M.MaxDist = 500
+
+local MOVESET_COLORS = {
+    Gojo = C3(85, 170, 255),
+    Naoya = C3(200, 130, 255),
+    Mahito = C3(100, 200, 100),
+    Megumi = C3(70, 130, 255),
+    Hakari = C3(255, 180, 50),
+    Choso = C3(220, 60, 60),
+    Itadori = C3(255, 100, 100),
+    Todo = C3(220, 180, 50),
+    Yuki = C3(255, 140, 200),
+    Heian = C3(180, 50, 180),
+    Locust = C3(180, 40, 40),
+    Charles = C3(100, 180, 180),
+}
 
 local tracked = {}
 
@@ -80,6 +97,24 @@ local function make(plr)
         d.heldItem.Size = 13
         d.heldItem.Center = true
         d.heldItem.Outline = true
+
+        d.moveset = Drawing.new("Text")
+        d.moveset.Visible = false
+        d.moveset.Color = C3(255,255,255)
+        d.moveset.Size = 13
+        d.moveset.Center = false
+        d.moveset.Outline = true
+
+        d.abilities = {}
+        for i = 1, 4 do
+            local t = Drawing.new("Text")
+            t.Visible = false
+            t.Color = C3(180, 180, 200)
+            t.Size = 12
+            t.Center = true
+            t.Outline = true
+            d.abilities[i] = t
+        end
     end)
     tracked[plr] = d
 end
@@ -92,6 +127,8 @@ local function nuke(plr)
         if d.tracer then d.tracer:Remove() end
         if d.name then d.name:Remove() end
         if d.team then d.team:Remove() end
+        if d.moveset then d.moveset:Remove() end
+        for _, t in ipairs(d.abilities or {}) do t:Remove() end
         if d.hpBg then d.hpBg:Remove() end
         if d.hpFill then d.hpFill:Remove() end
         if d.heldItem then d.heldItem:Remove() end
@@ -133,6 +170,8 @@ local function hideD(d)
         if d.tracer then d.tracer.Visible = false end
         if d.name then d.name.Visible = false end
         if d.team then d.team.Visible = false end
+        if d.moveset then d.moveset.Visible = false end
+        for _, t in ipairs(d.abilities or {}) do t.Visible = false end
         if d.hpBg then d.hpBg.Visible = false end
         if d.hpFill then d.hpFill.Visible = false end
         if d.heldItem then d.heldItem.Visible = false end
@@ -372,6 +411,53 @@ RunService.Heartbeat:Connect(function()
             else
                 d.heldItem.Visible = false
             end
+
+            -- Moveset ESP (shows moveset name to the right of box)
+            if M.MovesetEnabled then
+                local mName = "Unknown"
+                pcall(function() mName = char:GetAttribute("Moveset") or "Unknown" end)
+                d.moveset.Text = mName
+                d.moveset.Color = MOVESET_COLORS[mName] or baseColor
+                if M.BoxEnabled then
+                    d.moveset.Position = V2(cx + w + 8, cy - h / 2)
+                    d.moveset.Visible = true
+                else
+                    local head = char:FindFirstChild("Head") or hrp
+                    local hv, hon, hz = w2s(head.Position + Vector3.new(0, 0.45, 0))
+                    if hon and hz > 0 then
+                        d.moveset.Position = V2(hv.X + 10, hv.Y - 8)
+                        d.moveset.Visible = true
+                    else
+                        d.moveset.Visible = false
+                    end
+                end
+            else
+                d.moveset.Visible = false
+            end
+
+            -- Abilities ESP (shows cooldowns below the box)
+            if M.AbilitiesEnabled then
+                local movesetFolder = char:FindFirstChild("Moveset")
+                local yOff = cy + h/2 + (M.HeldItemEnabled and 18 or 4)
+                if movesetFolder then
+                    local idx = 0
+                    for _, child in ipairs(movesetFolder:GetChildren()) do
+                        if child:IsA("NumberValue") and idx < 4 then
+                            idx = idx + 1
+                            d.abilities[idx].Text = child.Name .. " [" .. child.Value .. "s]"
+                            d.abilities[idx].Position = V2(cx, yOff + (idx - 1) * 14)
+                            d.abilities[idx].Visible = true
+                        end
+                    end
+                    for i = idx + 1, 4 do
+                        d.abilities[i].Visible = false
+                    end
+                else
+                    for i = 1, 4 do d.abilities[i].Visible = false end
+                end
+            else
+                for i = 1, 4 do d.abilities[i].Visible = false end
+            end
         end)
     end
 end)
@@ -398,6 +484,8 @@ function API:SetNameEsp(s) M.NameEnabled = s end
 function API:SetHealthEsp(s) M.HealthEnabled = s end
 function API:SetTracers(s) M.TracersEnabled = s end
 function API:SetTeamEsp(s) M.TeamEnabled = s end
+function API:SetMovesetEsp(s) M.MovesetEnabled = s end
+function API:SetAbilitiesEsp(s) M.AbilitiesEnabled = s end
 function API:SetHeldItemEsp(s) M.HeldItemEnabled = s end
 function API:SetSkeletonEsp(s)
     M.SkeletonEnabled = s
