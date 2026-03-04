@@ -482,7 +482,7 @@ end)
 local function setupAbilTracking(plr, char)
     local d = tracked[plr]
     if not d then return end
-    d.cdTimers = {}
+    d.cdTimers = d.cdTimers or {}
     d.abilMaxCDs = {}
 
     local movesetFolder = char:FindFirstChild("Moveset")
@@ -493,82 +493,131 @@ local function setupAbilTracking(plr, char)
             end
         end
     end
+end
 
-    -- Watch Info.InSkill as backup
-    pcall(function()
-        local info = char:FindFirstChild("Info")
-        if not info then return end
-        local inSkill = info:FindFirstChild("InSkill")
-        if inSkill and inSkill:IsA("BoolValue") then
-            inSkill.Changed:Connect(function(val)
-                if val == true and d.abilMaxCDs then
-                    -- Put the shortest-ready ability on CD as best guess
-                    local best, bestCD = nil, math.huge
-                    for name, cd in pairs(d.abilMaxCDs) do
-                        local endT = d.cdTimers[name]
-                        if (not endT or tick() >= endT) and cd < bestCD then
-                            best = name
-                            bestCD = cd
-                        end
-                    end
-                    if best then
-                        d.cdTimers[best] = tick() + bestCD
-                    end
+-- M1 / basic effects to ignore (not ability usage)
+local M1_EFFECTS = {
+    hit = true, hit2 = true, hit3 = true,
+    chasehit = true, aerialhit = true,
+    swing = true, swing2 = true,
+    chase = true, camfix = true,
+    dusttrail = true, flash = true,
+    block = true, guardbreak = true,
+}
+
+-- Hook Knit services to intercept ability usage
+local KNIT_SERVICES = {
+    "GojoService", "MahitoService", "StockpileService",
+    "MegumiService", "MahoragaService", "HakariService",
+    "ChosoService", "TodoService", "YukiService",
+    "HeianService", "LocustService", "CharlesService",
+    "NaoyaService", "ItadoriService",
+}
+
+pcall(function()
+    local Knit = require(game.ReplicatedStorage:WaitForChild("Knit"):WaitForChild("Knit"))
+    
+    task.spawn(function()
+        task.wait(2) -- wait for Knit to fully start
+        
+        for _, svcName in ipairs(KNIT_SERVICES) do
+            pcall(function()
+                local svc = Knit.GetService(svcName)
+                if not svc then return end
+
+                -- Hook Effects signal
+                if svc.Effects then
+                    svc.Effects:Connect(function(effectName, ...)
+                        pcall(function()
+                            local args = {...}
+                            local eName = tostring(effectName):lower():gsub("%s+", "")
+                            
+                            -- Skip M1/basic effects
+                            if M1_EFFECTS[eName] then return end
+                            
+                            -- Find the character from the args
+                            local char = nil
+                            for _, arg in ipairs(args) do
+                                if typeof(arg) == "Instance" and arg:IsA("Model") and arg:FindFirstChild("Humanoid") then
+                                    char = arg
+                                    break
+                                end
+                            end
+                            if not char then return end
+                            
+                            local player = Players:GetPlayerFromCharacter(char)
+                            if not player then return end
+                            local d = tracked[player]
+                            if not d or not d.abilMaxCDs then return end
+                            
+                            -- Fuzzy match effect name to an ability
+                            for abilName, maxCD in pairs(d.abilMaxCDs) do
+                                local cleanAbil = abilName:lower():gsub("%s+", "")
+                                -- Check if effect contains ability words
+                                for word in abilName:lower():gmatch("%a+") do
+                                    if #word > 2 and eName:find(word, 1, true) then
+                                        d.cdTimers[abilName] = tick() + maxCD
+                                        return
+                                    end
+                                end
+                                -- Check if ability contains effect name
+                                if cleanAbil:find(eName, 1, true) or eName:find(cleanAbil, 1, true) then
+                                    d.cdTimers[abilName] = tick() + maxCD
+                                    return
+                                end
+                            end
+                            
+                            -- No direct match - put shortest ready ability on CD
+                            local best, bestCD = nil, math.huge
+                            for name, cd in pairs(d.abilMaxCDs) do
+                                local endT = d.cdTimers[name]
+                                if (not endT or tick() >= endT) and cd < bestCD then
+                                    best = name
+                                    bestCD = cd
+                                end
+                            end
+                            if best then
+                                d.cdTimers[best] = tick() + bestCD
+                            end
+                        end)
+                    end)
+                end
+
+                -- Hook Hitbox signal too
+                if svc.Hitbox then
+                    svc.Hitbox:Connect(function(effectName, ...)
+                        pcall(function()
+                            local args = {...}
+                            local eName = tostring(effectName):lower():gsub("%s+", "")
+                            if M1_EFFECTS[eName] then return end
+                            
+                            local char = nil
+                            for _, arg in ipairs(args) do
+                                if typeof(arg) == "Instance" and arg:IsA("Model") and arg:FindFirstChild("Humanoid") then
+                                    char = arg
+                                    break
+                                end
+                            end
+                            if not char then return end
+                            
+                            local player = Players:GetPlayerFromCharacter(char)
+                            if not player then return end
+                            local d = tracked[player]
+                            if not d or not d.abilMaxCDs then return end
+                            
+                            for abilName, maxCD in pairs(d.abilMaxCDs) do
+                                for word in abilName:lower():gmatch("%a+") do
+                                    if #word > 2 and eName:find(word, 1, true) then
+                                        d.cdTimers[abilName] = tick() + maxCD
+                                        return
+                                    end
+                                end
+                            end
+                        end)
+                    end)
                 end
             end)
         end
-    end)
-end
-
--- Watch workspace.Effects for ability VFX spawns (most reliable detection)
-pcall(function()
-    local effectsFolder = workspace:WaitForChild("Effects", 5)
-    if not effectsFolder then return end
-    effectsFolder.ChildAdded:Connect(function(effect)
-        pcall(function()
-            task.wait() -- let CFrame/Position be set
-            local pos = nil
-            if effect:IsA("BasePart") then
-                pos = effect.Position
-            elseif effect:IsA("Model") and effect.PrimaryPart then
-                pos = effect.PrimaryPart.Position
-            elseif effect:IsA("Model") then
-                local p = effect:FindFirstChildWhichIsA("BasePart")
-                if p then pos = p.Position end
-            end
-            if not pos then return end
-
-            local effectName = effect.Name:lower():gsub("%s+", ""):gsub("_", "")
-
-            -- Find nearest tracked player to this effect
-            local closest, closestDist = nil, 25
-            for plr, d in pairs(tracked) do
-                if plr.Character then
-                    local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        local dist = (hrp.Position - pos).Magnitude
-                        if dist < closestDist then
-                            closest = plr
-                            closestDist = dist
-                        end
-                    end
-                end
-            end
-
-            if not closest then return end
-            local d = tracked[closest]
-            if not d or not d.abilMaxCDs then return end
-
-            -- Try to match effect name to an ability
-            for abilName, maxCD in pairs(d.abilMaxCDs) do
-                for word in abilName:lower():gmatch("%a+") do
-                    if #word > 2 and effectName:find(word, 1, true) then
-                        d.cdTimers[abilName] = tick() + maxCD
-                        return
-                    end
-                end
-            end
-        end)
     end)
 end)
 
@@ -607,4 +656,12 @@ function API:SetSkeletonEsp(s)
         for p in pairs(tracked) do pcall(buildSkel, p) end
     end
 end
+function API:TriggerCooldown(plr, abilityName)
+    local d = tracked[plr]
+    if not d or not d.abilMaxCDs then return end
+    if d.abilMaxCDs[abilityName] then
+        d.cdTimers[abilityName] = tick() + d.abilMaxCDs[abilityName]
+    end
+end
 return API
+
