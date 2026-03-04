@@ -440,13 +440,35 @@ RunService.Heartbeat:Connect(function()
                 local movesetFolder = char:FindFirstChild("Moveset")
                 local yOff = cy + h/2 + (M.HeldItemEnabled and 18 or 4)
                 if movesetFolder then
+                    -- Track max cooldowns per player
+                    if not d.maxCDs then d.maxCDs = {} end
                     local idx = 0
                     for _, child in ipairs(movesetFolder:GetChildren()) do
                         if child:IsA("NumberValue") and idx < 4 then
                             idx = idx + 1
-                            d.abilities[idx].Text = child.Name .. " [" .. child.Value .. "s]"
-                            d.abilities[idx].Position = V2(cx, yOff + (idx - 1) * 14)
-                            d.abilities[idx].Visible = true
+                            local val = child.Value
+                            -- Store max CD (highest seen value = full cooldown = ready)
+                            if not d.maxCDs[child.Name] or val > d.maxCDs[child.Name] then
+                                d.maxCDs[child.Name] = val
+                            end
+                            local maxCD = d.maxCDs[child.Name]
+                            local label = d.abilities[idx]
+                            if val >= maxCD then
+                                label.Text = "✓ " .. child.Name .. " [Ready]"
+                                label.Color = C3(80, 255, 80)
+                            elseif val <= 0 then
+                                label.Text = "✓ " .. child.Name .. " [Ready]"
+                                label.Color = C3(80, 255, 80)
+                            else
+                                label.Text = "⏳ " .. child.Name .. " [" .. string.format("%.1f", val) .. "s]"
+                                if val < maxCD * 0.3 then
+                                    label.Color = C3(255, 255, 80)
+                                else
+                                    label.Color = C3(255, 100, 80)
+                                end
+                            end
+                            label.Position = V2(cx, yOff + (idx - 1) * 14)
+                            label.Visible = true
                         end
                     end
                     for i = idx + 1, 4 do
