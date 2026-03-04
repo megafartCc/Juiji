@@ -440,32 +440,27 @@ RunService.Heartbeat:Connect(function()
                 local movesetFolder = char:FindFirstChild("Moveset")
                 local yOff = cy + h/2 + (M.HeldItemEnabled and 18 or 4)
                 if movesetFolder then
-                    -- Track max cooldowns per player
-                    if not d.maxCDs then d.maxCDs = {} end
+                    if not d.cdTimers then d.cdTimers = {} end
+                    if not d.abilMaxCDs then d.abilMaxCDs = {} end
+                    local now = tick()
                     local idx = 0
                     for _, child in ipairs(movesetFolder:GetChildren()) do
                         if child:IsA("NumberValue") and idx < 4 then
                             idx = idx + 1
-                            local val = child.Value
-                            -- Store max CD (highest seen value = full cooldown = ready)
-                            if not d.maxCDs[child.Name] or val > d.maxCDs[child.Name] then
-                                d.maxCDs[child.Name] = val
-                            end
-                            local maxCD = d.maxCDs[child.Name]
+                            d.abilMaxCDs[child.Name] = child.Value
                             local label = d.abilities[idx]
-                            if val >= maxCD then
-                                label.Text = "✓ " .. child.Name .. " [Ready]"
-                                label.Color = C3(80, 255, 80)
-                            elseif val <= 0 then
-                                label.Text = "✓ " .. child.Name .. " [Ready]"
-                                label.Color = C3(80, 255, 80)
-                            else
-                                label.Text = "⏳ " .. child.Name .. " [" .. string.format("%.1f", val) .. "s]"
-                                if val < maxCD * 0.3 then
+                            local endTime = d.cdTimers[child.Name]
+                            if endTime and now < endTime then
+                                local remain = endTime - now
+                                label.Text = "⏳ " .. child.Name .. " [" .. string.format("%.1f", remain) .. "s]"
+                                if remain < child.Value * 0.3 then
                                     label.Color = C3(255, 255, 80)
                                 else
                                     label.Color = C3(255, 100, 80)
                                 end
+                            else
+                                label.Text = "✓ " .. child.Name
+                                label.Color = C3(80, 255, 80)
                             end
                             label.Position = V2(cx, yOff + (idx - 1) * 14)
                             label.Visible = true
@@ -484,13 +479,124 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
+local function hookAbilities(plr, char)
+    local d = tracked[plr]
+    if not d then return end
+    d.cdTimers = {}
+    d.abilMaxCDs = {}
+    d.abilHooked = true
+
+    -- Read max cooldowns from Moveset folder
+    local movesetFolder = char:FindFirstChild("Moveset")
+    if movesetFolder then
+        for _, child in ipairs(movesetFolder:GetChildren()) do
+            if child:IsA("NumberValue") then
+                d.abilMaxCDs[child.Name] = child.Value
+            end
+        end
+    end
+
+    -- Build lowercase keyword list for fuzzy matching
+    local keywords = {}
+    for name, _ in pairs(d.abilMaxCDs) do
+        -- Split ability name into words for matching
+        for word in name:lower():gmatch("%a+") do
+            if #word > 2 then
+                keywords[word] = name
+            end
+        end
+        keywords[name:lower():gsub("%s+", "")] = name
+    end
+
+    -- Hook Animator to detect ability usage
+    pcall(function()
+        local hum = char:WaitForChild("Humanoid", 3)
+        if not hum then return end
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = hum:WaitForChild("Animator", 3)
+        end
+        if not animator then return end
+
+        animator.AnimationPlayed:Connect(function(track)
+            pcall(function()
+                local animName = ""
+                if track.Animation then
+                    animName = track.Animation.Name:lower():gsub("%s+", "")
+                end
+                if animName == "" or animName == "idle" or animName == "walk" or animName == "run" or animName == "jump" or animName == "fall" then return end
+
+                -- Try to match animation to an ability
+                local matched = nil
+                -- Direct match: animation name contains ability keywords
+                for kw, abilName in pairs(keywords) do
+                    if animName:find(kw, 1, true) then
+                        matched = abilName
+                        break
+                    end
+                end
+
+                -- If matched, start cooldown timer
+                if matched and d.abilMaxCDs[matched] then
+                    d.cdTimers[matched] = tick() + d.abilMaxCDs[matched]
+                end
+            end)
+        end)
+    end)
+
+    -- Also watch Info.InSkill as backup detection
+    pcall(function()
+        local info = char:FindFirstChild("Info")
+        if info then
+            local inSkill = info:FindFirstChild("InSkill")
+            if inSkill and inSkill:IsA("BoolValue") then
+                inSkill.Changed:Connect(function(val)
+                    if val == true then
+                        -- Player started a skill — check playing animations NOW
+                        pcall(function()
+                            local hum = char:FindFirstChildOfClass("Humanoid")
+                            local animator = hum and hum:FindFirstChildOfClass("Animator")
+                            if not animator then return end
+                            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                                local animName = track.Animation and track.Animation.Name:lower():gsub("%s+", "") or ""
+                                for kw, abilName in pairs(keywords) do
+                                    if animName:find(kw, 1, true) and d.abilMaxCDs[abilName] then
+                                        d.cdTimers[abilName] = tick() + d.abilMaxCDs[abilName]
+                                        return
+                                    end
+                                end
+                            end
+                            -- If no match found, put shortest CD ability on cooldown as best guess
+                            local shortest, shortestCD = nil, math.huge
+                            for name, cd in pairs(d.abilMaxCDs) do
+                                local endT = d.cdTimers[name]
+                                if (not endT or tick() >= endT) and cd < shortestCD then
+                                    shortest = name
+                                    shortestCD = cd
+                                end
+                            end
+                            if shortest then
+                                d.cdTimers[shortest] = tick() + shortestCD
+                            end
+                        end)
+                    end
+                end)
+            end
+        end
+    end)
+end
+
 local function onPlr(plr)
     if plr == LP then return end
     pcall(function()
         make(plr)
-        plr.CharacterAdded:Connect(function()
+        if plr.Character then
+            pcall(hookAbilities, plr, plr.Character)
+        end
+        plr.CharacterAdded:Connect(function(char)
             task.wait(0.5)
             pcall(buildSkel, plr)
+            pcall(hookAbilities, plr, char)
         end)
     end)
 end
